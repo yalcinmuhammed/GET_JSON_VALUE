@@ -1,0 +1,2 @@
+# GET_JSON_VALUE
+SQL Server 2014 JSON_VALUE alternative
