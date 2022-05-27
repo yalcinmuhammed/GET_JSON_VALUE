@@ -1,0 +1,206 @@
+-- Author:		Muhammed Yalçın
+-- Create date: 25.05.2022
+-- Description:	SQL Server 2016 öncesi için JSON_VALUE fonksiyonu
+-- Example Usage of Path: statu[0].column, statu.column, statu.column.subcolumn, statu etc.
+-- Expression must be a valid JSON data
+
+CREATE FUNCTION [<schema>].[GET_JSON_VALUE](@expression nvarchar(max), @path varchar(500))
+RETURNS nvarchar(max)
+AS
+BEGIN
+	DECLARE 
+	 @key varchar(100)
+	,@tempExpression nvarchar(max)
+	,@index int = NULL
+	,@keyJson varchar(100)
+	,@keyIdx int
+	,@valueIdx int
+	,@termIdx int
+	,@colonx int
+	,@quotesx int
+	,@endQuotesx int
+	,@commax int
+	,@squareBracketLeftx int = 0
+	,@tempSquareBracketLeftx int = 0
+	,@squareBracketRightx int = 0
+	,@curlyBraceLeftx int = 0
+	,@tempCurlyBraceLeftx int = 0
+	,@curlyBraceRightx int = 0
+	,@isString bit
+	,@isArray bit = 0
+	IF @path is null OR @path = '' RETURN @expression
+
+	DECLARE @dotKeyx int= CHARINDEX('.', @path)
+	IF @dotKeyx <> 0
+	BEGIN
+		SET @key = SUBSTRING(@path, 0, @dotKeyx)
+		SET @path = SUBSTRING(@path, @dotKeyx+1, LEN(@path) )
+	END
+	ELSE
+	BEGIN
+		SET @key = @path
+		SET @path = null
+	END
+	DECLARE @squareBracketKeyx int = CHARINDEX('[', @key)
+	IF @squareBracketKeyx <> 0 AND CHARINDEX(']', @key) = LEN(@key)
+	BEGIN
+		SET @index = SUBSTRING(@key, @squareBracketKeyx+1, LEN(@key)-@squareBracketKeyx-1)
+		SET @key = SUBSTRING(@key, 0, @squareBracketKeyx)
+		SET @isArray = 1;
+	END
+		
+	SET @keyJson = '"' + @key+ '"'
+
+	SET @tempExpression = @expression
+	--find arrays and remove for searching main key
+	SET @tempExpression = RIGHT(@tempExpression, LEN(@tempExpression) - 1)
+	SET @tempExpression = LEFT(@tempExpression, LEN(@tempExpression) - 1)
+	
+	WHILE CHARINDEX('[', @tempExpression, 0) <> 0
+	BEGIN
+		SET @squareBracketLeftx = CHARINDEX('[', @tempExpression, 0)
+		SET @squareBracketRightx = CHARINDEX(']', @tempExpression, @squareBracketLeftx)
+		SET @tempSquareBracketLeftx = CHARINDEX('[', @tempExpression, @squareBracketLeftx + 1)
+		WHILE @tempSquareBracketLeftx <> 0 AND @tempSquareBracketLeftx < @squareBracketRightx
+		BEGIN
+			SET @tempSquareBracketLeftx = CHARINDEX('[', @tempExpression, @tempSquareBracketLeftx + 1)
+			SET @squareBracketRightx = CHARINDEX(']', @tempExpression, @squareBracketRightx+1)
+		END
+		SET @tempExpression = REPLACE(@tempExpression, SUBSTRING(@tempExpression, @squareBracketLeftx, @squareBracketRightx - @squareBracketLeftx + 1), '')
+	END
+	
+	--find objects and remove for searching main key
+	WHILE CHARINDEX('{', @tempExpression, 0) <> 0
+	BEGIN
+		SET @curlyBraceLeftx = CHARINDEX('{', @tempExpression, 0)
+		SET @curlyBraceRightx = CHARINDEX('}', @tempExpression, @curlyBraceLeftx)
+		SET @tempCurlyBraceLeftx = CHARINDEX('{', @tempExpression, @curlyBraceLeftx + 1)
+		WHILE @tempCurlyBraceLeftx <> 0 AND @tempCurlyBraceLeftx < @curlyBraceRightx
+		BEGIN
+			SET @tempCurlyBraceLeftx = CHARINDEX('{', @tempExpression, @tempCurlyBraceLeftx + 1)
+			SET @curlyBraceRightx = CHARINDEX('}', @tempExpression, @curlyBraceRightx+1)
+		END
+		SET @tempExpression = REPLACE(@tempExpression, SUBSTRING(@tempExpression, @curlyBraceLeftx, @curlyBraceRightx - @curlyBraceLeftx + 1), '')
+	END
+	
+	--Is Exist Key
+	SET @keyIdx = CHARINDEX(@keyJson, @tempExpression)
+	IF @keyIdx = 0 RETURN NULL
+	
+	SET @keyIdx = CHARINDEX(@keyJson, @expression)
+	SET @valueIdx = @keyIdx + LEN(@keyJson)
+
+	SET @colonx = CHARINDEX(':', @expression, @valueIdx)
+	SET @commax = CHARINDEX(',', @expression, @valueIdx)
+	SET @quotesx = CHARINDEX('"', @expression, @valueIdx)
+	SET @squareBracketLeftx = CHARINDEX('[', @expression, @valueIdx)
+	SET @curlyBraceLeftx = CHARINDEX('{', @expression, @valueIdx)
+	
+	IF @squareBracketLeftx BETWEEN @colonx AND @quotesx --Array Content
+	BEGIN
+		SET @squareBracketRightx = CHARINDEX(']', @expression, @squareBracketLeftx)
+		SET @tempSquareBracketLeftx = CHARINDEX('[', @expression, @squareBracketLeftx + 1)
+		
+		WHILE @tempSquareBracketLeftx <> 0 AND @tempSquareBracketLeftx < @squareBracketRightx
+		BEGIN
+			
+			SET @tempSquareBracketLeftx = CHARINDEX('[', @expression, @tempSquareBracketLeftx + 1)
+			SET @squareBracketRightx = CHARINDEX(']', @expression, @squareBracketRightx+1)
+		END
+		
+		SET @expression = SUBSTRING(@expression, @squareBracketLeftx, @squareBracketRightx - @squareBracketLeftx + 1)
+		
+		IF @index is NULL AND (@path is null OR @path = '') RETURN @expression
+		IF @index is NULL RETURN NULL
+
+		DECLARE @i int = 0, @startCurlyBracex int = 0, @endCurlyBracex int = 0, @tempStartCurlyBracex int = 0, @indexedExpression nvarchar(max);
+		WHILE @i <= @index
+		BEGIN
+			SET @startCurlyBracex = CHARINDEX('{', @expression, @endCurlyBracex+1)
+			IF @startCurlyBracex = 0 RETURN NULL -- array out of range
+			SET @endCurlyBracex = CHARINDEX('}', @expression, @startCurlyBracex)
+
+			SET @tempStartCurlyBracex = CHARINDEX('{', @expression, @startCurlyBracex + 1)
+			WHILE @tempStartCurlyBracex <> 0 AND @tempStartCurlyBracex < @endCurlyBracex
+			BEGIN
+				SET @tempStartCurlyBracex = CHARINDEX('{', @expression, @tempStartCurlyBracex + 1)
+				SET @endCurlyBracex = CHARINDEX('}', @expression, @endCurlyBracex+1)
+			END
+			
+			SET @indexedExpression = SUBSTRING(@expression, @startCurlyBracex, @endCurlyBracex - @startCurlyBracex + 1)
+			SET @i = @i + 1
+		END
+		
+		--Call Recursive @expression, @path
+		RETURN [COR].[GET_JSON_VALUE](@indexedExpression, @path)
+	END
+	ELSE IF @curlyBraceLeftx BETWEEN @colonx AND @quotesx --Object Content
+	BEGIN
+		IF @isArray = 1 RETURN NULL --It is not an object If it is array
+
+		SET @curlyBraceRightx = CHARINDEX('}', @expression, @curlyBraceLeftx)
+		SET @tempCurlyBraceLeftx = CHARINDEX('{', @expression, @curlyBraceLeftx + 1)
+		WHILE @tempCurlyBraceLeftx <> 0 AND @tempCurlyBraceLeftx < @curlyBraceRightx
+		BEGIN
+		
+			SET @tempCurlyBraceLeftx = CHARINDEX('{', @expression, @tempCurlyBraceLeftx + 1)
+			SET @curlyBraceRightx = CHARINDEX('}', @expression, @curlyBraceRightx+1)
+		END
+		SET @expression = SUBSTRING(@expression, @curlyBraceLeftx, @curlyBraceRightx - @curlyBraceLeftx + 1)
+
+		--Call Recursive @expression, @path
+		RETURN [COR].[GET_JSON_VALUE](@expression, @path)
+	END
+	ELSE --Value Content
+	BEGIN
+		SET @termIdx = @quotesx
+		IF @termIdx <> 0 
+		BEGIN
+			
+			IF @commax = 0 SET @commax = CHARINDEX('}', @expression, @valueIdx)--end of json string
+			SET @isString = 0
+			--2 quatos
+			SET @endQuotesx = CHARINDEX('"', @expression, @quotesx+1)--getting next quotes
+			-- Overcome JSON qoute escape
+			WHILE SUBSTRING(@expression, @endQuotesx-1, 1) = '\'
+			BEGIN
+				SET @endQuotesx = CHARINDEX('"', @expression, @endQuotesx + 1)
+			END
+
+			IF (@quotesx BETWEEN @colonx AND @commax) AND (@endQuotesx BETWEEN @colonx AND @commax)
+			BEGIN
+				SET @isString = 1
+				SET @termIdx = @endQuotesx		-- end index
+				SET @valueIdx = @quotesx + 1	-- start index
+			END
+			ELSE
+			BEGIN
+				SET @isString = 0
+				-- Overcome spaces after comma
+				WHILE SUBSTRING(@expression, @endQuotesx, 1) <> ','
+				BEGIN
+					SET @endQuotesx = @endQuotesx - 1
+				END
+				SET @termIdx = @endQuotesx	-- end index
+				SET @valueIdx = @colonx	+ 1	-- start index
+			END
+		END 
+		ELSE 
+		BEGIN -- end of json non-string
+			SET @termIdx = CHARINDEX(',', @expression, @colonx)
+			IF @termIdx = 0 SET @termIdx = CHARINDEX('}', @expression, @colonx)
+			SET @valueIdx = @colonx	+ 1	
+			SET @isString = 0
+		END
+
+		IF @termIdx = 0 RETURN NULL
+		
+		-- Replace escapte quote before return value
+		IF @isString = 0
+			RETURN LTRIM(RTRIM(REPLACE(SUBSTRING(@expression, @valueIdx, @termIdx - @valueIdx), '\"', '"')))
+		ELSE
+			RETURN REPLACE(SUBSTRING(@expression, @valueIdx, @termIdx - @valueIdx), '\"', '"')
+	END
+
+	RETURN NULL--Default
+END
